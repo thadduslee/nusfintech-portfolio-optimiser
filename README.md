@@ -26,7 +26,7 @@ streamlit run streamlit_app.py
 ## Optimisation
 Monte Carlo simulation → Maximum Sharpe ratio → Optimal weights
 
-## Done by:
+## Authors
 - Dexun
 - Thaddus
 - Eron
