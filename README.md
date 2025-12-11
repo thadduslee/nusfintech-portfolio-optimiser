@@ -17,6 +17,13 @@ Run the App
 ```bash
 streamlit run streamlit_app.py
 ```
+
+## Usage
+1. Enter tickers: AAPL, NVDA, MSFT, BTC-USD
+2. Set current portfolio weights
+3. Click Run Optimization
+4. View results and rebalancing plan
+
 ## How It Works
 ### Volatility Prediction
 - EGARCH(1,1): Captures volatility clustering
@@ -25,6 +32,12 @@ streamlit run streamlit_app.py
 
 ## Optimisation
 Monte Carlo simulation → Maximum Sharpe ratio → Optimal weights
+
+## Expected Returns
+$$R = 0.5 \cdot R_{\text{arith}} + 0.5 \cdot R_{\text{geo}}$$
+
+## Covariance Matrix
+$$\Sigma_{\text{future}} = D \cdot Corr \cdot D$$
 
 ## Authors
 - Dexun
