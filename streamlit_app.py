@@ -9,26 +9,19 @@ from backend.model import predict_next_day_volatility
 
 warnings.filterwarnings("ignore")
 
-# Streamlit Page Config
 st.set_page_config(
     page_title="ML Smart Portfolio Rebalancer",
     layout="wide",
 )
 
-# Streamlit Wrapper Function
 @st.cache_data(show_spinner=False)
 def predict_next_day_volatility_streamlit(ticker: str):
-    """
-    Thin wrapper calling backend.predict_next_day_volatility(return_prices=True).
-    Returns: (volatility, price_series, error_message).
-    """
     try:
         vol, prices = predict_next_day_volatility(ticker, return_prices=True)
         return vol, prices, None
     except Exception as e:
         return None, None, str(e)
 
-# Sidebar UI
 logo_col1, logo_col2, logo_col3 = st.sidebar.columns([1, 2, 1])
 with logo_col2:
     try:
@@ -36,33 +29,38 @@ with logo_col2:
     except:
         st.write("📈")
 
-
-
 st.sidebar.title("Smart Rebalancer")
 st.sidebar.caption("Group 1: Dexun, Thaddus, Eron")
 st.sidebar.divider()
 
+# --- INPUTS ---
+# 1. Tickers (Kept outside form so the main page updates immediately when you type)
 default_tickers = "AAPL, NVDA, MSFT, BTC-USD, ETH-USD"
 ticker_input = st.sidebar.text_area("Stocks (Comma Separated)", value=default_tickers)
 
-risk_free_rate = st.sidebar.number_input("Risk Free Rate", value=0.04, step=0.01)
+# 2. Simulation Settings (Wrapped in a FORM to stop constant running when sliding)
+with st.sidebar.form("simulation_settings"):
+    st.write("### Simulation Settings")
+    risk_free_rate = st.number_input("Risk Free Rate", value=0.04, step=0.01)
 
-num_simulations = st.sidebar.slider(
-    "Monte Carlo Simulations",
-    min_value=1000,
-    max_value=10000,
-    value=2500,
-    step=500,
-    help="Higher = more accuracy but slower"
-)
+    num_simulations = st.slider(
+        "Monte Carlo Simulations",
+        min_value=1000,
+        max_value=10000,
+        value=2500,
+        step=500,
+        help="Higher = more accuracy but slower"
+    )
+    
+    # The app will NOT rerun when you drag the slider. 
+    # It only reruns when you click this button:
+    st.form_submit_button("Apply Settings")
 
 st.sidebar.divider()
 st.sidebar.info("Use the Proposal tab to see methodology. Navigate to Live Optimizer to run the tool.")
 
-# Tabs
 tab_info, tab_app = st.tabs(["Proposal & Methodology", "Live Optimizer"])
 
-# TAB 1: Proposal & Methodology
 with tab_info:
     st.title("ML-Powered Smart Portfolio Rebalancer")
 
@@ -119,14 +117,12 @@ XGBoost corrects non-linear relationships
 Predict → Covariance → Optimal Weights  
 """)
 
-# TAB 2: LIVE OPTIMIZER
 with tab_app:
     st.title("Live Portfolio Dashboard")
 
-    # Normalize ticker list
     stocks = [s.strip().upper() for s in ticker_input.split(",") if s.strip()]
 
-    # Initialize weight DataFrame
+    # Initialize weights in session state if not present or if tickers changed
     if "weights_df" not in st.session_state:
         eq = round(100 / len(stocks), 2) if stocks else 0
         st.session_state.weights_df = pd.DataFrame({
@@ -134,7 +130,7 @@ with tab_app:
             "Current Weight (%)": [eq] * len(stocks)
         })
     else:
-        # Resync number of assets
+        # Check if the number of stocks matches the dataframe
         if len(st.session_state.weights_df) != len(stocks):
             eq = round(100 / len(stocks), 2) if stocks else 0
             st.session_state.weights_df = pd.DataFrame({
@@ -142,6 +138,7 @@ with tab_app:
                 "Current Weight (%)": [eq] * len(stocks)
             })
         else:
+            # Just update the names in case they changed order/spelling
             st.session_state.weights_df["Asset"] = stocks
 
     col_left, col_right = st.columns([2, 1])
@@ -170,7 +167,6 @@ with tab_app:
 
         ready = 99 <= total_weight <= 101
 
-        # FIXED — No more DeltaGenerator printing
         if ready:
             st.success("Valid Sum")
         else:
@@ -178,7 +174,7 @@ with tab_app:
 
     st.divider()
 
-    # Run Button
+    # --- CALCULATION LOGIC (Only runs when clicked) ---
     if st.button("Run Prediction & Optimization", type="primary", disabled=not ready):
 
         if len(stocks) < 2:
@@ -192,9 +188,7 @@ with tab_app:
         valid_stocks = []
         price_series_list = []
 
-        # Prediction Loop
         for i, stock in enumerate(stocks):
-
             status.write(f"Analyzing **{stock}** ...")
             vol, prices, err = predict_next_day_volatility_streamlit(stock)
 
@@ -211,7 +205,6 @@ with tab_app:
             status.update(label="Insufficient valid tickers", state="error")
             st.stop()
 
-        # Covariance Matrix
         status.write("Building Covariance Matrix...")
 
         price_df = pd.concat(price_series_list, axis=1)
@@ -221,23 +214,6 @@ with tab_app:
         D = np.diag(np.array(predicted_vols) / 100)
         future_cov = D @ corr.values @ D
 
-        # Display outputs
-        st.subheader("Intermediate Model Outputs")
-        c1, c2 = st.columns(2)
-
-        with c1:
-            st.markdown("**Predicted Annualized Volatility (%)**")
-            st.dataframe(
-                pd.DataFrame({"Asset": valid_stocks,
-                              "Predicted Vol (%)": [f"{v:.4f}" for v in predicted_vols]}),
-                hide_index=True
-            )
-
-        with c2:
-            st.markdown("**Future Covariance Matrix**")
-            st.dataframe(pd.DataFrame(future_cov, index=valid_stocks, columns=valid_stocks))
-
-        # Monte Carlo Optimization
         status.write(f"Running {num_simulations} Monte Carlo Portfolios...")
 
         num_portfolios = num_simulations
@@ -245,19 +221,13 @@ with tab_app:
         volatilities = []
         allocations = []
 
-        # BLENDED EXPECTED RETURNS (Arithmetic + Geometric):
-        # - Reduce unrealistic expected returns
-        # - Reduce overweighting of crypto
-        # - Improve Sharpe optimization stability
         arith_daily = returns_df.mean()
         arith_annual = arith_daily * 252
-
         geo_daily = (1 + returns_df).prod() ** (1 / len(returns_df)) - 1
         geo_annual = (1 + geo_daily) ** 252 - 1
 
         mean_annual = 0.5 * arith_annual + 0.5 * geo_annual
         mean_annual = mean_annual[valid_stocks]
-
 
         for _ in range(num_portfolios):
             w = np.random.random(len(valid_stocks))
@@ -280,9 +250,70 @@ with tab_app:
         best_idx = sharpe.idxmax()
         best_port = portfolio.iloc[best_idx]
 
+        user_weights = dict(zip(edited_df["Asset"], edited_df["Current Weight (%)"]))
+        rebal = []
+        for s in valid_stocks:
+            optimal = best_port[s] * 100
+            current = user_weights.get(s, 0)
+            diff = optimal - current
+
+            if diff > 1:
+                action = f"BUY (+{diff:.1f}%)"
+            elif diff < -1:
+                action = f"SELL ({diff:.1f}%)"
+            else:
+                action = "HOLD"
+
+            rebal.append({
+                "Asset": s,
+                "Current Weight": f"{current:.2f}%",
+                "Optimal Weight": f"{optimal:.2f}%",
+                "Difference": f"{diff:+.2f}%",
+                "Action": action,
+                "Predicted Vol": f"{predicted_vols[valid_stocks.index(s)]:.2f}%"
+            })
+
+        # SAVE RESULTS TO SESSION STATE
+        st.session_state['results'] = {
+            'valid_stocks': valid_stocks,
+            'predicted_vols': predicted_vols,
+            'future_cov': future_cov,
+            'portfolio': portfolio,
+            'sharpe': sharpe,
+            'best_port': best_port,
+            'rebal': rebal,
+            'user_weights': user_weights
+        }
+
         status.update(label="Optimization Complete", state="complete", expanded=False)
 
-        # Results
+    # --- DISPLAY LOGIC (Runs if results exist) ---
+    if 'results' in st.session_state:
+        results = st.session_state['results']
+        valid_stocks = results['valid_stocks']
+        predicted_vols = results['predicted_vols']
+        future_cov = results['future_cov']
+        portfolio = results['portfolio']
+        sharpe = results['sharpe']
+        best_port = results['best_port']
+        rebal = results['rebal']
+        user_weights = results['user_weights']
+
+        st.subheader("Intermediate Model Outputs")
+        c1, c2 = st.columns(2)
+
+        with c1:
+            st.markdown("**Predicted Annualized Volatility (%)**")
+            st.dataframe(
+                pd.DataFrame({"Asset": valid_stocks,
+                              "Predicted Vol (%)": [f"{v:.4f}" for v in predicted_vols]}),
+                hide_index=True
+            )
+
+        with c2:
+            st.markdown("**Future Covariance Matrix**")
+            st.dataframe(pd.DataFrame(future_cov, index=valid_stocks, columns=valid_stocks))
+
         m1, m2, m3 = st.columns(3)
         m1.metric("Optimal Sharpe Ratio", f"{sharpe.max():.2f}")
         m2.metric("Expected Return", f"{best_port['Returns'] * 100:.2f}%")
@@ -290,7 +321,6 @@ with tab_app:
 
         st.divider()
 
-        # Efficient Frontier
         c1, c2 = st.columns([2, 1])
 
         with c1:
@@ -314,8 +344,6 @@ with tab_app:
         with c2:
             st.subheader("Allocation Comparison")
 
-            user_weights = dict(zip(edited_df["Asset"], edited_df["Current Weight (%)"]))
-
             comp_data = []
             for s in valid_stocks:
                 comp_data.append({"Asset": s, "Type": "Current", "Weight": user_weights.get(s, 0)})
@@ -331,29 +359,5 @@ with tab_app:
             )
             st.plotly_chart(fig2, use_container_width=True)
 
-        # Rebalancing Plan
         st.subheader("Rebalancing Action Plan")
-
-        rebal = []
-        for s in valid_stocks:
-            optimal = best_port[s] * 100
-            current = user_weights.get(s, 0)
-            diff = optimal - current
-
-            if diff > 1:
-                action = f"BUY (+{diff:.1f}%)"
-            elif diff < -1:
-                action = f"SELL ({diff:.1f}%)"
-            else:
-                action = "HOLD"
-
-            rebal.append({
-                "Asset": s,
-                "Current Weight": f"{current:.2f}%",
-                "Optimal Weight": f"{optimal:.2f}%",
-                "Difference": f"{diff:+.2f}%",
-                "Action": action,
-                "Predicted Vol": f"{predicted_vols[valid_stocks.index(s)]:.2f}%"
-            })
-
         st.dataframe(pd.DataFrame(rebal), use_container_width=True)
