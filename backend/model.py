@@ -143,7 +143,10 @@ def predict_next_day_volatility(ticker, return_prices=False):
     model, scaler = load_model()
 
     # download data
-    df = yf.download(ticker, start="2015-01-01", progress=False)
+    df = yf.download(ticker, start="2015-01-01", progress=False, multi_level_index=False)
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+    
     if df.empty:
         raise ValueError(f"No data for {ticker}")
 
